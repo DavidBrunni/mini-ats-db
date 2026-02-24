@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabaseClient";
@@ -20,22 +20,64 @@ type Job = {
   created_at: string;
 };
 
+type Organization = {
+  id: string;
+  name: string;
+};
+
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [userRole, setUserRole] = useState<string>("customer");
   const [organizationId, setOrganizationId] = useState<string | null>(null);
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [adminSelectedOrgId, setAdminSelectedOrgId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [newJobTitle, setNewJobTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const fetchJobs = useCallback(
+    async (orgId: string, isAdmin: boolean, token: string | undefined) => {
+      setError(null);
+      if (isAdmin && token) {
+        const res = await fetch(
+          `/api/admin/jobs?organization_id=${encodeURIComponent(orgId)}`,
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          setError(err.error ?? res.statusText);
+          setJobs([]);
+          return;
+        }
+        const data = await res.json();
+        setJobs(data ?? []);
+        return;
+      }
+      const { data, error: fetchError } = await supabase
+        .from("jobs")
+        .select("id, organization_id, title, created_at")
+        .eq("organization_id", orgId)
+        .order("created_at", { ascending: false });
+
+      if (fetchError) {
+        setError(fetchError.message);
+        setJobs([]);
+        return;
+      }
+      setJobs(data ?? []);
+    },
+    []
+  );
+
   useEffect(() => {
     async function init() {
       const {
-        data: { user: currentUser },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
+      const currentUser = session?.user ?? null;
       if (!currentUser) {
         router.replace("/login");
         return;
@@ -54,41 +96,73 @@ export default function DashboardPage() {
         return;
       }
 
-      setUserRole(profile.role ?? "customer");
+      const role = profile.role ?? "customer";
+      setUserRole(role);
       setOrganizationId(profile.organization_id);
-      await fetchJobs(profile.organization_id);
+
+      if (role === "admin") {
+        const orgRes = await fetch("/api/admin/organizations", {
+          headers: session ? { Authorization: `Bearer ${session.access_token}` } : {},
+        });
+        if (orgRes.ok) {
+          const orgList = await orgRes.json();
+          setOrganizations(orgList ?? []);
+          const firstOrgId = orgList?.length ? orgList[0].id : profile.organization_id;
+          setAdminSelectedOrgId(firstOrgId);
+          await fetchJobs(firstOrgId, true, session?.access_token);
+        } else {
+          await fetchJobs(profile.organization_id, false, undefined);
+        }
+      } else {
+        setAdminSelectedOrgId(null);
+        await fetchJobs(profile.organization_id, false, undefined);
+      }
       setLoading(false);
     }
     init();
-  }, [router]);
+  }, [router, fetchJobs]);
 
-  async function fetchJobs(orgId: string) {
-    setError(null);
-    const { data, error: fetchError } = await supabase
-      .from("jobs")
-      .select("id, organization_id, title, created_at")
-      .eq("organization_id", orgId)
-      .order("created_at", { ascending: false });
-
-    if (fetchError) {
-      setError(fetchError.message);
-      setJobs([]);
-      return;
-    }
-    setJobs(data ?? []);
-  }
+  useEffect(() => {
+    if (userRole !== "admin" || !adminSelectedOrgId || !user) return;
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      fetchJobs(adminSelectedOrgId, true, session?.session?.access_token);
+    });
+  }, [adminSelectedOrgId, userRole, user, fetchJobs]);
 
   async function handleCreateJob(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const title = newJobTitle.trim();
-    if (!title || !organizationId) return;
+    const orgId = userRole === "admin" ? adminSelectedOrgId : organizationId;
+    if (!title || !orgId) return;
 
     setCreating(true);
     setError(null);
 
+    if (userRole === "admin") {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch("/api/admin/jobs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        },
+        body: JSON.stringify({ organization_id: orgId, title }),
+      });
+      setCreating(false);
+      setNewJobTitle("");
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setError(err.error ?? res.statusText);
+        return;
+      }
+      const inserted = await res.json();
+      setJobs((prev) => [inserted, ...prev]);
+      return;
+    }
+
     const { data: inserted, error: insertError } = await supabase
       .from("jobs")
-      .insert({ organization_id: organizationId, title })
+      .insert({ organization_id: orgId, title })
       .select("id, organization_id, title, created_at")
       .single();
 
@@ -127,8 +201,27 @@ export default function DashboardPage() {
           Dashboard
         </h1>
         <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
-          Jobs in your organization
+          {userRole === "admin" ? "Select an organization to view and manage its jobs." : "Jobs in your organization"}
         </p>
+
+        {userRole === "admin" && organizations.length > 0 && (
+          <div className="mt-4">
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Organization
+            </label>
+            <select
+              value={adminSelectedOrgId ?? ""}
+              onChange={(e) => setAdminSelectedOrgId(e.target.value || null)}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100"
+            >
+              {organizations.map((org) => (
+                <option key={org.id} value={org.id}>
+                  {org.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <form
           onSubmit={handleCreateJob}
@@ -139,12 +232,12 @@ export default function DashboardPage() {
             value={newJobTitle}
             onChange={(e) => setNewJobTitle(e.target.value)}
             placeholder="New job title"
-            disabled={creating || !organizationId}
+            disabled={creating || !(userRole === "admin" ? adminSelectedOrgId : organizationId)}
             className="flex-1 rounded-md border border-zinc-300 bg-white px-3 py-2 text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400 disabled:opacity-60"
           />
           <button
             type="submit"
-            disabled={creating || !newJobTitle.trim() || !organizationId}
+            disabled={creating || !newJobTitle.trim() || !(userRole === "admin" ? adminSelectedOrgId : organizationId)}
             className="rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
           >
             {creating ? "Adding…" : "Add job"}

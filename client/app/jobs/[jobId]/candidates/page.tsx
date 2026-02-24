@@ -20,6 +20,37 @@ import { Navbar } from "@/app/components/Navbar";
 const STAGES = ["Applied", "Screening", "Interview", "Offer", "Hired"] as const;
 type Stage = (typeof STAGES)[number];
 
+function escapeCsv(value: string): string {
+  if (/[",\r\n]/.test(value)) return `"${value.replace(/"/g, '""')}"`;
+  return value;
+}
+
+function parseCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+    } else if (inQuotes) {
+      if (ch === '"' && line[i + 1] === '"') {
+        cur += '"';
+        i++;
+      } else {
+        cur += ch;
+      }
+    } else if (ch === ",") {
+      out.push(cur.trim());
+      cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur.trim());
+  return out;
+}
+
 type Candidate = {
   id: string;
   job_id: string;
@@ -42,10 +73,12 @@ function KanbanColumn({
   stage,
   candidates,
   jobTitle,
+  onOpenDetail,
 }: {
   stage: Stage;
   candidates: Candidate[];
   jobTitle: string;
+  onOpenDetail: (c: Candidate) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
 
@@ -66,7 +99,12 @@ function KanbanColumn({
           </p>
         ) : (
           candidates.map((c) => (
-            <DraggableCard key={c.id} candidate={c} jobTitle={jobTitle} />
+            <DraggableCard
+              key={c.id}
+              candidate={c}
+              jobTitle={jobTitle}
+              onOpenDetail={onOpenDetail}
+            />
           ))
         )}
       </div>
@@ -74,7 +112,15 @@ function KanbanColumn({
   );
 }
 
-function DraggableCard({ candidate, jobTitle }: { candidate: Candidate; jobTitle: string }) {
+function DraggableCard({
+  candidate,
+  jobTitle,
+  onOpenDetail,
+}: {
+  candidate: Candidate;
+  jobTitle: string;
+  onOpenDetail: (c: Candidate) => void;
+}) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: candidate.id,
     data: { candidate },
@@ -83,32 +129,43 @@ function DraggableCard({ candidate, jobTitle }: { candidate: Candidate; jobTitle
   return (
     <div
       ref={setNodeRef}
-      {...listeners}
-      {...attributes}
-      className={`cursor-grab rounded border border-zinc-200 bg-white p-2 shadow-sm active:cursor-grabbing dark:border-zinc-600 dark:bg-zinc-900 ${
+      className={`rounded border border-zinc-200 bg-white shadow-sm dark:border-zinc-600 dark:bg-zinc-900 ${
         isDragging ? "opacity-50" : ""
       }`}
     >
-      <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
-        {candidate.name}
-      </p>
-      {jobTitle ? (
-        <p className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
-          {jobTitle}
+      <div {...listeners} {...attributes} className="cursor-grab p-2 active:cursor-grabbing">
+        <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
+          {candidate.name}
         </p>
-      ) : null}
-      {candidate.linkedin_url ? (
-        <a
-          href={candidate.linkedin_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="mt-0.5 flex items-center gap-1 text-[11px] text-blue-600 hover:underline dark:text-blue-400"
-          onClick={(e) => e.stopPropagation()}
-        >
-          <LinkedInIcon />
-          LinkedIn
-        </a>
-      ) : null}
+        {jobTitle ? (
+          <p className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+            {jobTitle}
+          </p>
+        ) : null}
+        {candidate.linkedin_url ? (
+          <a
+            href={candidate.linkedin_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-0.5 flex items-center gap-1 text-[11px] text-blue-600 hover:underline dark:text-blue-400"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <LinkedInIcon />
+            LinkedIn
+          </a>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpenDetail(candidate);
+        }}
+        className="w-full border-t border-zinc-100 px-2 py-1 text-left text-[11px] text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+        aria-label="Comments and activity"
+      >
+        Comments & activity
+      </button>
     </div>
   );
 }
@@ -148,6 +205,198 @@ function DragOverlayCard({
   );
 }
 
+type CommentRow = {
+  id: string;
+  body: string;
+  created_at: string;
+  user_id?: string;
+};
+
+type ActivityRow = {
+  id: string;
+  from_stage: string | null;
+  to_stage: string;
+  created_at: string;
+  user_id?: string;
+};
+
+function CandidateDetailModal({
+  candidate,
+  jobTitle,
+  onClose,
+  onCommentAdded,
+}: {
+  candidate: Candidate;
+  jobTitle: string;
+  onClose: () => void;
+  onCommentAdded?: () => void;
+}) {
+  const [comments, setComments] = useState<CommentRow[]>([]);
+  const [activities, setActivities] = useState<ActivityRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newComment, setNewComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!candidate?.id) return;
+
+    let cancelled = false;
+
+    async function load() {
+      setLoading(true);
+      const [commentsRes, activitiesRes] = await Promise.all([
+        supabase
+          .from("candidate_comments")
+          .select("id, body, created_at, user_id")
+          .eq("candidate_id", candidate.id)
+          .order("created_at", { ascending: true }),
+        supabase
+          .from("candidate_activities")
+          .select("id, from_stage, to_stage, created_at, user_id")
+          .eq("candidate_id", candidate.id)
+          .order("created_at", { ascending: false }),
+      ]);
+
+      if (cancelled) return;
+      if (commentsRes.data) setComments(commentsRes.data as CommentRow[]);
+      if (activitiesRes.data) setActivities(activitiesRes.data as ActivityRow[]);
+      setLoading(false);
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [candidate.id]);
+
+  async function handleAddComment(e: React.FormEvent) {
+    e.preventDefault();
+    const body = newComment.trim();
+    if (!body) return;
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+
+    setSubmitting(true);
+    const { data: inserted, error } = await supabase
+      .from("candidate_comments")
+      .insert({ candidate_id: candidate.id, user_id: user.id, body })
+      .select("id, body, created_at, user_id")
+      .single();
+
+    setSubmitting(false);
+    setNewComment("");
+
+    if (!error && inserted) {
+      setComments((prev) => [...prev, inserted as CommentRow]);
+      onCommentAdded?.();
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="candidate-detail-title"
+    >
+      <div
+        className="max-h-[85vh] w-full max-w-lg overflow-hidden rounded-lg border border-zinc-200 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-900"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-700">
+          <h2 id="candidate-detail-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            {candidate.name}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+            aria-label="Close"
+          >
+            <span className="text-xl leading-none">&times;</span>
+          </button>
+        </div>
+        {jobTitle ? (
+          <p className="border-b border-zinc-100 px-4 py-1 text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+            {jobTitle}
+          </p>
+        ) : null}
+
+        <div className="max-h-[60vh] overflow-y-auto px-4 py-3">
+          {loading ? (
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
+          ) : (
+            <>
+              <section className="mb-4">
+                <h3 className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                  Activity
+                </h3>
+                {activities.length === 0 ? (
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">No stage changes yet.</p>
+                ) : (
+                  <ul className="space-y-1.5 text-sm">
+                    {activities.map((a) => (
+                      <li key={a.id} className="text-zinc-600 dark:text-zinc-400">
+                        <span className="font-medium">
+                          {a.from_stage ?? "—"} → {a.to_stage}
+                        </span>
+                        <span className="ml-2 text-zinc-500 dark:text-zinc-500">
+                          {new Date(a.created_at).toLocaleString()}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                  Comments
+                </h3>
+                {comments.length === 0 ? (
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">No comments yet.</p>
+                ) : (
+                  <ul className="mb-3 space-y-2 text-sm">
+                    {comments.map((c) => (
+                      <li
+                        key={c.id}
+                        className="rounded border border-zinc-100 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-800/50"
+                      >
+                        <p className="text-zinc-900 dark:text-zinc-100">{c.body}</p>
+                        <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
+                          {new Date(c.created_at).toLocaleString()}
+                        </p>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <form onSubmit={handleAddComment} className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                    placeholder="Add a comment…"
+                    disabled={submitting}
+                    className="flex-1 rounded border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400"
+                  />
+                  <button
+                    type="submit"
+                    disabled={submitting || !newComment.trim()}
+                    className="rounded bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
+                  >
+                    {submitting ? "…" : "Add"}
+                  </button>
+                </form>
+              </section>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function JobCandidatesPage() {
   const router = useRouter();
   const params = useParams();
@@ -164,6 +413,8 @@ export default function JobCandidatesPage() {
   const [newLinkedIn, setNewLinkedIn] = useState("");
   const [creating, setCreating] = useState(false);
   const [activeCandidate, setActiveCandidate] = useState<Candidate | null>(null);
+  const [detailCandidate, setDetailCandidate] = useState<Candidate | null>(null);
+  const [importing, setImporting] = useState(false);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
@@ -275,6 +526,79 @@ export default function JobCandidatesPage() {
       setCandidates((prev) =>
         prev.map((c) => (c.id === active.id ? { ...c, stage: candidate.stage } : c))
       );
+      return;
+    }
+
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    if (currentUser) {
+      await supabase.from("candidate_activities").insert({
+        candidate_id: active.id,
+        user_id: currentUser.id,
+        from_stage: candidate.stage,
+        to_stage: newStage,
+      });
+    }
+  }
+
+  function exportCandidatesToCsv(list: Candidate[], jobTitle: string) {
+    const headers = ["name", "linkedin_url", "stage", "created_at"];
+    const rows = list.map((c) => [
+      escapeCsv(c.name),
+      escapeCsv(c.linkedin_url ?? ""),
+      escapeCsv(c.stage),
+      escapeCsv(new Date(c.created_at).toISOString()),
+    ]);
+    const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${jobTitle.replace(/[^a-z0-9]/gi, "_")}_candidates.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleImportCsv(file: File) {
+    if (!jobId) return;
+    setImporting(true);
+    setError(null);
+    const text = await file.text();
+    const lines = text.split(/\r?\n/).filter((line) => line.trim());
+    if (lines.length === 0) {
+      setError("CSV file is empty.");
+      setImporting(false);
+      return;
+    }
+    const firstRow = parseCsvLine(lines[0]);
+    const headerRow = firstRow.map((h) => h.toLowerCase());
+    const nameCol = headerRow.findIndex((h) => h === "name");
+    const linkedInCol = headerRow.findIndex((h) => h === "linkedin_url" || h === "linkedin" || h === "url");
+    const hasHeader = nameCol >= 0 || linkedInCol >= 0 || headerRow.some((h) => h.includes("name") || h.includes("linkedin"));
+    const startRow = hasHeader ? 1 : 0;
+    const nameIdx = nameCol >= 0 ? nameCol : 0;
+    const toInsert: { name: string; linkedin_url: string | null }[] = [];
+    for (let i = startRow; i < lines.length; i++) {
+      const parts = parseCsvLine(lines[i]);
+      const name = (parts[nameIdx] ?? "").trim();
+      if (!name) continue;
+      const url = linkedInCol >= 0 ? (parts[linkedInCol] ?? "").trim() || null : null;
+      toInsert.push({ name, linkedin_url: url });
+    }
+    let added = 0;
+    for (const row of toInsert) {
+      const { data, error: insertErr } = await supabase
+        .from("candidates")
+        .insert({ job_id: jobId, name: row.name, linkedin_url: row.linkedin_url, stage: "Applied" })
+        .select("id, job_id, name, linkedin_url, stage, created_at")
+        .single();
+      if (!insertErr && data) {
+        setCandidates((prev) => [...prev, data as Candidate]);
+        added++;
+      }
+    }
+    setImporting(false);
+    if (added < toInsert.length && toInsert.length > 0) {
+      setError(`Imported ${added} of ${toInsert.length} candidates. Some rows may have failed.`);
     }
   }
 
@@ -371,18 +695,44 @@ export default function JobCandidatesPage() {
           <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>
         )}
 
-        <div className="mt-6">
-          <label className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
-            Search candidates
-          </label>
-          <input
-            type="search"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Filter by name…"
-            className="w-full max-w-xs rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400"
-            aria-label="Search candidates by name"
-          />
+        <div className="mt-6 flex flex-wrap items-end gap-4">
+          <div>
+            <label className="mb-2 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Search candidates
+            </label>
+            <input
+              type="search"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Filter by name…"
+              className="w-full max-w-xs rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400"
+              aria-label="Search candidates by name"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => exportCandidatesToCsv(candidates, job?.title ?? "candidates")}
+              disabled={candidates.length === 0}
+              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+            >
+              Export CSV
+            </button>
+            <label className="cursor-pointer rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700">
+              <input
+                type="file"
+                accept=".csv"
+                className="sr-only"
+                disabled={importing}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) handleImportCsv(file);
+                  e.target.value = "";
+                }}
+              />
+              {importing ? "Importing…" : "Import CSV"}
+            </label>
+          </div>
         </div>
 
         <div className="mt-4">
@@ -398,6 +748,7 @@ export default function JobCandidatesPage() {
                   stage={stage}
                   candidates={candidatesByStage[stage]}
                   jobTitle={job?.title ?? ""}
+                  onOpenDetail={setDetailCandidate}
                 />
               ))}
             </div>
@@ -410,6 +761,14 @@ export default function JobCandidatesPage() {
               ) : null}
             </DragOverlay>
           </DndContext>
+
+          {detailCandidate ? (
+            <CandidateDetailModal
+              candidate={detailCandidate}
+              jobTitle={job?.title ?? ""}
+              onClose={() => setDetailCandidate(null)}
+            />
+          ) : null}
           {candidates.length === 0 && (
             <p className="mt-3 text-center text-sm text-zinc-500 dark:text-zinc-400">
               Add a candidate above — they will appear in Applied.
