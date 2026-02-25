@@ -14,27 +14,21 @@ export default function Home() {
 
   useEffect(() => {
     async function init() {
-      try {
-        const {
-          data: { user: currentUser },
-        } = await supabase.auth.getUser();
-        setUser(currentUser ?? null);
-        if (!currentUser) {
-          setLoading(false);
-          return;
-        }
-        const { data: profileData } = await supabase
-          .from("profiles")
-          .select("id, role")
-          .eq("id", currentUser.id)
-          .maybeSingle();
-        setProfile(profileData ?? null);
-      } catch {
-        setUser(null);
-        setProfile(null);
-      } finally {
+      const {
+        data: { user: currentUser },
+      } = await supabase.auth.getUser();
+      setUser(currentUser ?? null);
+      if (!currentUser) {
         setLoading(false);
+        return;
       }
+      const { data: profileData } = await supabase
+        .from("profiles")
+        .select("id, role")
+        .eq("id", currentUser.id)
+        .maybeSingle();
+      setProfile(profileData ?? null);
+      setLoading(false);
     }
     init();
   }, []);
