@@ -26,3 +26,75 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Snygg scrollbar under kanban-kolumnerna (horisontell) */
+.kanban-scroll-x {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(161 161 170) transparent;
+}
+
+.kanban-scroll-x::-webkit-scrollbar {
+  height: 8px;
+}
+
+.kanban-scroll-x::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.kanban-scroll-x::-webkit-scrollbar-thumb {
+  background: rgb(161 161 170);
+  border-radius: 4px;
+}
+
+.kanban-scroll-x::-webkit-scrollbar-thumb:hover {
+  background: rgb(113 113 122);
+}
+
+.dark .kanban-scroll-x {
+  scrollbar-color: rgb(82 82 91) transparent;
+}
+
+.dark .kanban-scroll-x::-webkit-scrollbar-thumb {
+  background: rgb(82 82 91);
+}
+
+.dark .kanban-scroll-x::-webkit-scrollbar-thumb:hover {
+  background: rgb(63 63 70);
+}
+
+/* Vertikal scrollbar inuti varje kanban-kolumn */
+.kanban-scroll-y {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(161 161 170) transparent;
+}
+
+.kanban-scroll-y::-webkit-scrollbar {
+  width: 6px;
+}
+
+.kanban-scroll-y::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 3px;
+}
+
+.kanban-scroll-y::-webkit-scrollbar-thumb {
+  background: rgb(161 161 170);
+  border-radius: 3px;
+}
+
+.kanban-scroll-y::-webkit-scrollbar-thumb:hover {
+  background: rgb(113 113 122);
+}
+
+.dark .kanban-scroll-y {
+  scrollbar-color: rgb(82 82 91) transparent;
+}
+
+.dark .kanban-scroll-y::-webkit-scrollbar-thumb {
+  background: rgb(82 82 91);
+}
+
+.dark .kanban-scroll-y::-webkit-scrollbar-thumb:hover {
+  background: rgb(63 63 70);
+}

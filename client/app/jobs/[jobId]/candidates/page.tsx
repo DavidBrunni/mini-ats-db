@@ -69,6 +69,24 @@ function isStage(s: string): s is Stage {
   return STAGES.includes(s as Stage);
 }
 
+const STAGE_BADGE_CLASSES: Record<Stage, string> = {
+  Applied: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-200",
+  Screening: "bg-yellow-100 text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-200",
+  Interview: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200",
+  Offer: "bg-purple-100 text-purple-800 dark:bg-purple-900/40 dark:text-purple-200",
+  Hired: "bg-teal-100 text-teal-800 dark:bg-teal-900/40 dark:text-teal-200",
+};
+
+function StatusBadge({ stage }: { stage: Stage }) {
+  return (
+    <span
+      className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${STAGE_BADGE_CLASSES[stage]}`}
+    >
+      {stage}
+    </span>
+  );
+}
+
 function KanbanColumn({
   stage,
   candidates,
@@ -92,7 +110,7 @@ function KanbanColumn({
       <h3 className="mb-1.5 px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
         {stage}
       </h3>
-      <div className="flex min-h-[3rem] flex-1 flex-col gap-1.5 overflow-y-auto">
+      <div className="kanban-scroll-y flex min-h-[3rem] flex-1 flex-col gap-1.5 overflow-y-auto">
         {candidates.length === 0 ? (
           <p className="py-2 text-center text-[11px] text-zinc-400 dark:text-zinc-500">
             —
@@ -129,16 +147,19 @@ function DraggableCard({
   return (
     <div
       ref={setNodeRef}
-      className={`rounded border border-zinc-200 bg-white shadow-sm dark:border-zinc-600 dark:bg-zinc-900 ${
+      className={`rounded-xl border border-zinc-200 bg-white shadow-md transition-shadow hover:shadow-lg dark:border-zinc-600 dark:bg-zinc-900 ${
         isDragging ? "opacity-50" : ""
       }`}
     >
-      <div {...listeners} {...attributes} className="cursor-grab p-2 active:cursor-grabbing">
+      <div {...listeners} {...attributes} className="cursor-grab p-3 active:cursor-grabbing">
         <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
           {candidate.name}
         </p>
+        <div className="mt-1.5">
+          <StatusBadge stage={candidate.stage} />
+        </div>
         {jobTitle ? (
-          <p className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+          <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
             {jobTitle}
           </p>
         ) : null}
@@ -147,7 +168,7 @@ function DraggableCard({
             href={candidate.linkedin_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="mt-0.5 flex items-center gap-1 text-[11px] text-blue-600 hover:underline dark:text-blue-400"
+            className="mt-1 flex items-center gap-1 text-[11px] text-blue-600 hover:underline dark:text-blue-400"
             onClick={(e) => e.stopPropagation()}
           >
             <LinkedInIcon />
@@ -161,7 +182,7 @@ function DraggableCard({
           e.stopPropagation();
           onOpenDetail(candidate);
         }}
-        className="w-full border-t border-zinc-100 px-2 py-1 text-left text-[11px] text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+        className="w-full rounded-b-xl border-t border-zinc-100 px-3 py-1.5 text-left text-[11px] text-zinc-500 hover:bg-zinc-50 hover:text-zinc-700 dark:border-zinc-700 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
         aria-label="Comments and activity"
       >
         Comments & activity
@@ -186,17 +207,20 @@ function DragOverlayCard({
   jobTitle: string;
 }) {
   return (
-    <div className="w-48 rounded border border-zinc-200 bg-white p-2 shadow-lg dark:border-zinc-600 dark:bg-zinc-900">
+    <div className="w-52 rounded-xl border border-zinc-200 bg-white p-3 shadow-lg dark:border-zinc-600 dark:bg-zinc-900">
       <p className="truncate text-sm font-medium text-zinc-900 dark:text-zinc-100">
         {candidate.name}
       </p>
+      <div className="mt-1.5">
+        <StatusBadge stage={candidate.stage} />
+      </div>
       {jobTitle ? (
-        <p className="mt-0.5 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
+        <p className="mt-1 truncate text-[11px] text-zinc-500 dark:text-zinc-400">
           {jobTitle}
         </p>
       ) : null}
       {candidate.linkedin_url ? (
-        <span className="mt-0.5 flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400">
+        <span className="mt-1 flex items-center gap-1 text-[11px] text-blue-600 dark:text-blue-400">
           <LinkedInIcon />
           LinkedIn
         </span>
@@ -236,11 +260,14 @@ function CandidateDetailModal({
   const [loading, setLoading] = useState(true);
   const [newComment, setNewComment] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [commentError, setCommentError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!candidate?.id) return;
 
     let cancelled = false;
+    setLoadError(null);
 
     async function load() {
       setLoading(true);
@@ -258,6 +285,9 @@ function CandidateDetailModal({
       ]);
 
       if (cancelled) return;
+      const errs = [commentsRes.error?.message, activitiesRes.error?.message].filter(Boolean);
+      if (errs.length) setLoadError(errs.join(". "));
+      else setLoadError(null);
       if (commentsRes.data) setComments(commentsRes.data as CommentRow[]);
       if (activitiesRes.data) setActivities(activitiesRes.data as ActivityRow[]);
       setLoading(false);
@@ -274,8 +304,12 @@ function CandidateDetailModal({
     if (!body) return;
 
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setCommentError("Du måste vara inloggad för att lägga till kommentar.");
+      return;
+    }
 
+    setCommentError(null);
     setSubmitting(true);
     const { data: inserted, error } = await supabase
       .from("candidate_comments")
@@ -286,7 +320,11 @@ function CandidateDetailModal({
     setSubmitting(false);
     setNewComment("");
 
-    if (!error && inserted) {
+    if (error) {
+      setCommentError(error.message || "Kunde inte spara kommentaren.");
+      return;
+    }
+    if (inserted) {
       setComments((prev) => [...prev, inserted as CommentRow]);
       onCommentAdded?.();
     }
@@ -328,6 +366,11 @@ function CandidateDetailModal({
             <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading…</p>
           ) : (
             <>
+              {loadError && (
+                <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+                  {loadError} Kör SQL-migrationen i Supabase om tabellerna saknas (se supabase-comments-activity.sql).
+                </p>
+              )}
               <section className="mb-4">
                 <h3 className="mb-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
                   Activity
@@ -371,11 +414,19 @@ function CandidateDetailModal({
                     ))}
                   </ul>
                 )}
+                {commentError && (
+                  <p className="mb-2 rounded bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-200">
+                    {commentError}
+                  </p>
+                )}
                 <form onSubmit={handleAddComment} className="flex gap-2">
                   <input
                     type="text"
                     value={newComment}
-                    onChange={(e) => setNewComment(e.target.value)}
+                    onChange={(e) => {
+                      setNewComment(e.target.value);
+                      setCommentError(null);
+                    }}
                     placeholder="Add a comment…"
                     disabled={submitting}
                     className="flex-1 rounded border border-zinc-300 px-3 py-2 text-sm text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400"
@@ -531,12 +582,15 @@ export default function JobCandidatesPage() {
 
     const { data: { user: currentUser } } = await supabase.auth.getUser();
     if (currentUser) {
-      await supabase.from("candidate_activities").insert({
+      const { error: activityError } = await supabase.from("candidate_activities").insert({
         candidate_id: active.id,
         user_id: currentUser.id,
         from_stage: candidate.stage,
         to_stage: newStage,
       });
+      if (activityError) {
+        setError(activityError.message);
+      }
     }
   }
 
@@ -741,7 +795,7 @@ export default function JobCandidatesPage() {
             onDragStart={handleDragStart}
             onDragEnd={handleDragEnd}
           >
-            <div className="flex gap-2 overflow-x-auto pb-4">
+            <div className="kanban-scroll-x flex gap-2 overflow-x-auto pb-2">
               {STAGES.map((stage) => (
                 <KanbanColumn
                   key={stage}
