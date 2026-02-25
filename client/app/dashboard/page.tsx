@@ -33,6 +33,7 @@ export default function DashboardPage() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [adminSelectedOrgId, setAdminSelectedOrgId] = useState<string | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobSearchQuery, setJobSearchQuery] = useState("");
   const [newJobTitle, setNewJobTitle] = useState("");
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -248,13 +249,41 @@ export default function DashboardPage() {
           <p className="mt-3 text-sm text-red-600 dark:text-red-400">{error}</p>
         )}
 
+        {jobs.length > 0 && (
+          <div className="mt-4">
+            <label className="mb-1 block text-sm font-medium text-zinc-700 dark:text-zinc-300">
+              Filtrera jobb
+            </label>
+            <input
+              type="search"
+              value={jobSearchQuery}
+              onChange={(e) => setJobSearchQuery(e.target.value)}
+              placeholder="Sök på jobbtitel…"
+              className="w-full max-w-md rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-500 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder-zinc-400"
+              aria-label="Filtrera jobb på titel"
+            />
+          </div>
+        )}
+
         <ul className="mt-6 list-none space-y-2 p-0">
           {jobs.length === 0 && !error && (
             <li className="rounded-md border border-zinc-200 bg-white py-6 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
               No jobs yet. Add one above.
             </li>
           )}
-          {jobs.map((job) => (
+          {(() => {
+            const q = jobSearchQuery.trim().toLowerCase();
+            const filtered = q
+              ? jobs.filter((j) => j.title.toLowerCase().includes(q))
+              : jobs;
+            if (filtered.length === 0 && jobs.length > 0) {
+              return (
+                <li className="rounded-md border border-zinc-200 bg-white py-6 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400">
+                  Inga jobb matchar sökningen.
+                </li>
+              );
+            }
+            return filtered.map((job) => (
             <li key={job.id}>
               <Link
                 href={`/jobs/${job.id}/candidates`}
@@ -273,7 +302,8 @@ export default function DashboardPage() {
                 </span>
               </Link>
             </li>
-          ))}
+          ));
+          })()}
         </ul>
       </div>
     </div>

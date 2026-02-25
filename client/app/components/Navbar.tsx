@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 import { useTheme } from "@/app/components/ThemeProvider";
 
@@ -11,13 +11,18 @@ type NavbarProps = {
 };
 
 export function Navbar({ email, role }: NavbarProps) {
-  const router = useRouter();
   const { theme, toggleTheme } = useTheme();
+  const [loggingOut, setLoggingOut] = useState(false);
 
   async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/");
-    router.refresh();
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await supabase.auth.signOut();
+      window.location.href = "/";
+    } catch {
+      setLoggingOut(false);
+    }
   }
 
   return (
@@ -70,9 +75,10 @@ export function Navbar({ email, role }: NavbarProps) {
         <button
           type="button"
           onClick={handleLogout}
-          className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+          disabled={loggingOut}
+          className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-600 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
         >
-          Log out
+          {loggingOut ? "Loggar ut…" : "Log out"}
         </button>
       </div>
     </nav>
