@@ -1,0 +1,11 @@
+# Visa repot som TypeScript – räkna inte dependencies/build
+node_modules linguist-vendored
+.next linguist-vendored
+*.lock linguist-generated
+
+# Räknas i språkstatistik
+*.ts linguist-detectable=true
+*.tsx linguist-detectable=true
+*.js linguist-detectable=false
+*.mjs linguist-detectable=false
+*.cjs linguist-detectable=false
